@@ -82,18 +82,28 @@ import {
   VideoPlay,
   InfoFilled
 } from '@element-plus/icons-vue';
+import { useInterviewStore } from '../stores/interview.js';
 
 const router = useRouter();
+const interviewStore = useInterviewStore();
 const isStarting = ref(false);
 
 async function startInterview() {
   isStarting.value = true;
 
-  // 添加一个小延迟以显示加载状态
-  await new Promise(resolve => setTimeout(resolve, 500));
+  try {
+    // 重置之前的面试状态
+    interviewStore.resetInterview();
 
-  router.push('/interview');
-  isStarting.value = false;
+    // 添加一个小延迟以显示加载状态
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    router.push('/interview');
+  } catch (error) {
+    console.error('启动面试失败:', error);
+  } finally {
+    isStarting.value = false;
+  }
 }
 </script>
 

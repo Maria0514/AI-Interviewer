@@ -1,3 +1,9 @@
 项目设计文档.docx
 frontend/test-functionality.md
 frontend/UI-IMPROVEMENTS.md
+frontend/.env
+.gitignore
+.gitignore
+frontend/.env.development
+frontend/.env.example
+frontend/.env.production

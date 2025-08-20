@@ -20,7 +20,7 @@
               <div class="stat-content">
                 <el-icon class="stat-icon questions-icon"><QuestionFilled /></el-icon>
                 <div class="stat-info">
-                  <div class="stat-number">{{ records.length }}</div>
+                  <div class="stat-number">{{ interviewStore.interviewRecords.length }}</div>
                   <div class="stat-label">问题总数</div>
                 </div>
               </div>
@@ -64,7 +64,7 @@
 
         <div class="records-container">
           <div
-            v-for="(record, index) in records"
+            v-for="(record, index) in interviewStore.interviewRecords"
             :key="index"
             class="record-item"
           >
@@ -107,13 +107,13 @@
               </div>
             </div>
 
-            <el-divider v-if="index < records.length - 1" />
+            <el-divider v-if="index < interviewStore.interviewRecords.length - 1" />
           </div>
         </div>
 
         <!-- 空状态 -->
         <el-empty
-          v-if="records.length === 0"
+          v-if="interviewStore.interviewRecords.length === 0"
           description="暂无面试记录"
           :image-size="120"
         />
@@ -149,7 +149,7 @@
 
 <script setup>
 import { useRouter } from 'vue-router';
-import { onMounted, ref, computed } from 'vue';
+import { onMounted, computed } from 'vue';
 import {
   SuccessFilled,
   QuestionFilled,
@@ -163,43 +163,63 @@ import {
   RefreshRight
 } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
+import { useInterviewStore } from '../stores/interview.js';
 
 const router = useRouter();
-const records = ref([]);
+const interviewStore = useInterviewStore();
 
 // 计算总字数
 const totalWords = computed(() => {
-  return records.value.reduce((total, record) => {
-    return total + (record.answer ? record.answer.length : 0);
+  return interviewStore.interviewRecords.reduce((total, record) => {
+    let words = record.answer ? record.answer.length : 0;
+    // 加上追问回答的字数
+    if (record.followUps) {
+      words += record.followUps.reduce((followUpTotal, followUp) => {
+        return followUpTotal + (followUp.answer ? followUp.answer.length : 0);
+      }, 0);
+    }
+    return total + words;
   }, 0);
 });
 
 onMounted(() => {
-  // 从 localStorage 获取问答记录
-  const data = localStorage.getItem('interview_records');
-  if (data) {
-    try {
-      records.value = JSON.parse(data);
-    } catch (error) {
-      console.error('解析面试记录失败:', error);
-      records.value = [];
+  // 如果没有面试记录，尝试从localStorage恢复（兼容旧版本）
+  if (interviewStore.interviewRecords.length === 0) {
+    const data = localStorage.getItem('interview_records');
+    if (data) {
+      try {
+        const oldRecords = JSON.parse(data);
+        // 转换旧格式到新格式
+        const convertedRecords = oldRecords.map((record, index) => ({
+          questionIndex: index,
+          question: record.question,
+          answer: record.answer,
+          followUps: [],
+          feedback: record.feedback,
+          analysis: null,
+        }));
+        interviewStore.interviewRecords = convertedRecords;
+      } catch (error) {
+        console.error('解析面试记录失败:', error);
+      }
     }
   }
 });
 
 function downloadRecord() {
-  if (records.value.length === 0) {
+  if (interviewStore.interviewRecords.length === 0) {
     ElMessage.warning('暂无面试记录可下载');
     return;
   }
 
-  const content = JSON.stringify(records.value, null, 2);
+  const exportData = interviewStore.exportRecords();
+  const content = JSON.stringify(exportData, null, 2);
   const blob = new Blob([content], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
 
   const link = document.createElement('a');
   link.href = url;
-  link.download = `面试记录_${new Date().toLocaleDateString()}.json`;
+  link.download = `Kora面试记录_${new Date().toLocaleDateString().replace(/\//g, '-')}.json`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -209,6 +229,8 @@ function downloadRecord() {
 }
 
 function restart() {
+  // 清除所有数据
+  interviewStore.resetInterview();
   localStorage.removeItem('interview_records');
   router.push('/');
 }

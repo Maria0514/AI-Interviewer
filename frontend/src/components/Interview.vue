@@ -3,9 +3,9 @@
   <div class="page-container">
     <!-- 进度指示器 -->
     <div class="progress-container">
-      <el-steps :active="current" finish-status="success" align-center>
+      <el-steps :active="interviewStore.currentQuestionIndex" finish-status="success" align-center>
         <el-step
-          v-for="(question, index) in questions"
+          v-for="(question, index) in interviewStore.questions"
           :key="index"
           :title="`问题 ${index + 1}`"
         />
@@ -14,13 +14,13 @@
 
     <!-- 主要内容 -->
     <transition name="slide-up" mode="out-in">
-      <el-card class="interview-card main-card" shadow="hover" :key="current">
+      <el-card class="interview-card main-card" shadow="hover" :key="interviewStore.currentQuestionIndex">
         <div class="interview-content">
           <!-- 头部信息 -->
           <div class="header-section">
             <div class="question-number">
               <el-icon><QuestionFilled /></el-icon>
-              <span>第 {{ current + 1 }} 题 / 共 {{ questions.length }} 题</span>
+              <span>第 {{ interviewStore.currentQuestionIndex + 1 }} 题 / 共 {{ interviewStore.totalQuestions }} 题</span>
             </div>
             <h2 class="interview-title">面试问答</h2>
           </div>
@@ -32,8 +32,10 @@
                 <el-icon><ChatDotRound /></el-icon>
               </div>
               <div class="question-content">
-                <h3 class="question-label">面试官提问：</h3>
-                <p class="question-text">{{ currentQuestion }}</p>
+                <h3 class="question-label">
+                  {{ isFollowUp ? '面试官追问：' : '面试官提问：' }}
+                </h3>
+                <p class="question-text">{{ displayQuestion }}</p>
               </div>
             </div>
           </div>
@@ -48,7 +50,7 @@
                 :class="{ 'recording': isRecording }"
                 :loading="isRecording"
                 @click="startRecognition"
-                :disabled="isRecording"
+                :disabled="isRecording || isSubmitting"
               >
                 <el-icon class="button-icon">
                   <Microphone v-if="!isRecording" />
@@ -78,61 +80,68 @@
               </div>
               <span class="recording-text">正在聆听您的回答...</span>
             </div>
+
+            <!-- 手动输入提示 -->
+            <div v-if="!isRecording" class="manual-input-tip">
+              <el-text type="info" size="small">
+                <el-icon><User /></el-icon>
+                也可以直接在下方文本框中输入回答
+              </el-text>
+            </div>
           </div>
 
-          <!-- 回答展示 -->
-          <transition name="fade">
-            <div v-if="answerText" class="answer-section">
-              <div class="answer-card">
-                <div class="answer-header">
-                  <el-icon class="answer-icon"><User /></el-icon>
-                  <span class="answer-label">您的回答：</span>
-                </div>
-                <div class="answer-content">
-                  <el-input
-                    type="textarea"
-                    :model-value="answerText"
-                    readonly
-                    :autosize="{ minRows: 3, maxRows: 6 }"
-                    class="answer-textarea"
-                  />
-                </div>
+          <!-- 回答输入 -->
+          <div class="answer-section">
+            <div class="answer-card">
+              <div class="answer-header">
+                <el-icon class="answer-icon"><User /></el-icon>
+                <span class="answer-label">您的回答：</span>
+              </div>
+              <div class="answer-content">
+                <el-input
+                  v-model="answerText"
+                  type="textarea"
+                  :placeholder="isRecording ? '正在录音，请说话...' : '请输入您的回答或使用语音输入'"
+                  :autosize="{ minRows: 4, maxRows: 8 }"
+                  class="answer-textarea"
+                  :disabled="isRecording || isSubmitting"
+                  maxlength="1000"
+                  show-word-limit
+                />
               </div>
             </div>
-          </transition>
+          </div>
 
           <!-- 系统反馈 -->
           <transition name="fade">
-            <div v-if="feedback" class="feedback-section">
+            <div v-if="currentFeedback && !isFollowUp" class="feedback-section">
               <el-alert
-                :title="feedback"
+                :title="currentFeedback"
                 type="success"
                 class="feedback-alert"
                 show-icon
                 :closable="false"
-              >
-                <template #default>
-                  <div class="feedback-content">
-                    <el-icon class="feedback-icon"><SuccessFilled /></el-icon>
-                    <span>{{ feedback }}</span>
-                  </div>
-                </template>
-              </el-alert>
+              />
             </div>
           </transition>
 
           <!-- 操作按钮 -->
           <div class="action-section">
             <el-button
-              v-if="answerText && !isRecording"
+              v-if="canSubmit"
               type="success"
               size="large"
-              class="next-button"
-              @click="nextQuestion"
+              class="submit-button"
+              :loading="isSubmitting"
+              @click="submitAnswer"
             >
-              <el-icon><ArrowRight /></el-icon>
-              {{ current < questions.length - 1 ? '下一题' : '完成面试' }}
+              <el-icon v-if="!isSubmitting"><ArrowRight /></el-icon>
+              {{ isSubmitting ? '正在分析...' : (isFollowUp ? '提交追问回答' : '提交回答') }}
             </el-button>
+
+            <el-text v-if="!canSubmit && !isRecording" type="info" size="small">
+              请先输入回答内容
+            </el-text>
           </div>
         </div>
       </el-card>
@@ -142,8 +151,9 @@
 
 
 <script setup>
-import { ref } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { ElMessage, ElLoading } from 'element-plus';
 import {
   QuestionFilled,
   ChatDotRound,
@@ -154,56 +164,101 @@ import {
   SuccessFilled,
   ArrowRight
 } from '@element-plus/icons-vue';
-
-const questions = [
-  '你最近完成的一件最有成就感的事是什么？你在其中扮演了什么角色？',
-  '请讲讲一次你解决冲突或困难的经历。',
-  '如果你加入一个你不熟悉的项目团队，你会如何快速融入？',
-];
-const feedbacks = [
-  '明白了，谢谢你的回答。',
-  '好的，能再详细说说你的具体做法吗？',
-  '谢谢，接下来请听下一题。',
-];
-
-const current = ref(0);
-const currentQuestion = ref(questions[current.value]);
-const answerText = ref('');
-const feedback = ref('');
-const isRecording = ref(false);
-let recognition = null;
-
-// 记录所有问答
-const records = ref([]);
+import { useInterviewStore } from '../stores/interview.js';
 
 const router = useRouter();
+const interviewStore = useInterviewStore();
 
+// 组件状态
+const answerText = ref('');
+const isRecording = ref(false);
+const isSubmitting = ref(false);
+const isFollowUp = ref(false);
+const currentFeedback = ref('');
+let recognition = null;
+let loadingInstance = null;
+
+// 计算属性
+const displayQuestion = computed(() => {
+  if (isFollowUp.value && currentFeedback.value) {
+    return currentFeedback.value;
+  }
+  return interviewStore.currentQuestion;
+});
+
+const canSubmit = computed(() => {
+  return answerText.value.trim().length > 0 && !isRecording.value && !isSubmitting.value;
+});
+
+// 生命周期
+onMounted(async () => {
+  // 如果没有活跃的面试会话，启动新的面试
+  if (!interviewStore.isInterviewActive) {
+    try {
+      loadingInstance = ElLoading.service({
+        lock: true,
+        text: '正在初始化面试...',
+        background: 'rgba(0, 0, 0, 0.7)',
+      });
+
+      await interviewStore.startInterview({
+        interviewStyle: 'professional',
+        candidateName: '面试者',
+      });
+
+      ElMessage.success('面试已开始，请回答第一个问题');
+    } catch (error) {
+      ElMessage.error('启动面试失败，请重试');
+      router.push('/');
+    } finally {
+      if (loadingInstance) {
+        loadingInstance.close();
+      }
+    }
+  }
+});
+
+onUnmounted(() => {
+  if (recognition) {
+    recognition.stop();
+  }
+  if (loadingInstance) {
+    loadingInstance.close();
+  }
+});
+
+// 语音识别方法
 function startRecognition() {
   answerText.value = '';
-  feedback.value = '';
   isRecording.value = true;
+
   if (!('webkitSpeechRecognition' in window)) {
-    alert('当前浏览器不支持语音识别。请使用 Chrome 浏览器。');
+    ElMessage.warning('当前浏览器不支持语音识别，请使用 Chrome 浏览器或手动输入回答');
     isRecording.value = false;
     return;
   }
+
   recognition = new window.webkitSpeechRecognition();
   recognition.lang = 'zh-CN';
   recognition.continuous = false;
   recognition.interimResults = false;
+
   recognition.onresult = (event) => {
     answerText.value = event.results[0][0].transcript;
     isRecording.value = false;
-    // 简单模拟反馈
-    feedback.value = feedbacks[Math.floor(Math.random() * feedbacks.length)];
+    ElMessage.success('语音识别完成');
   };
-  recognition.onerror = () => {
+
+  recognition.onerror = (event) => {
     isRecording.value = false;
-    feedback.value = '语音识别出错，请重试。';
+    console.error('语音识别错误:', event.error);
+    ElMessage.error('语音识别失败，请重试或手动输入');
   };
+
   recognition.onend = () => {
     isRecording.value = false;
   };
+
   recognition.start();
 }
 
@@ -214,23 +269,55 @@ function stopRecognition() {
   }
 }
 
-function nextQuestion() {
-  // 保存当前问答
-  records.value.push({
-    question: currentQuestion.value,
-    answer: answerText.value,
-    feedback: feedback.value,
-  });
-  // 存储到 localStorage
-  localStorage.setItem('interview_records', JSON.stringify(records.value));
+// 提交回答
+async function submitAnswer() {
+  if (!canSubmit.value) return;
 
-  if (current.value < questions.length - 1) {
-    current.value++;
-    currentQuestion.value = questions[current.value];
-    answerText.value = '';
-    feedback.value = '';
-  } else {
-    router.push('/summary');
+  isSubmitting.value = true;
+
+  try {
+    loadingInstance = ElLoading.service({
+      lock: true,
+      text: '正在分析您的回答...',
+      background: 'rgba(0, 0, 0, 0.7)',
+    });
+
+    let result;
+    if (isFollowUp.value) {
+      result = await interviewStore.submitFollowUpAnswer(answerText.value);
+    } else {
+      result = await interviewStore.submitAnswer(answerText.value);
+    }
+
+    // 处理AI反馈
+    if (result.action === 'follow_up') {
+      // 追问
+      isFollowUp.value = true;
+      currentFeedback.value = result.feedback;
+      answerText.value = '';
+      ElMessage.info('面试官有追问，请继续回答');
+    } else if (result.action === 'next_question') {
+      // 下一题
+      isFollowUp.value = false;
+      currentFeedback.value = '';
+      answerText.value = '';
+      ElMessage.success('回答完成，进入下一题');
+    } else if (result.action === 'interview_complete') {
+      // 面试结束
+      ElMessage.success('面试完成！正在跳转到总结页面...');
+      setTimeout(() => {
+        router.push('/summary');
+      }, 1500);
+    }
+
+  } catch (error) {
+    ElMessage.error('提交失败，请重试');
+    console.error('提交回答失败:', error);
+  } finally {
+    isSubmitting.value = false;
+    if (loadingInstance) {
+      loadingInstance.close();
+    }
   }
 }
 </script>
@@ -430,6 +517,19 @@ function nextQuestion() {
   font-size: 14px;
 }
 
+/* 手动输入提示 */
+.manual-input-tip {
+  margin-top: 15px;
+  text-align: center;
+}
+
+.manual-input-tip .el-text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 /* 回答区域 */
 .answer-section {
   margin-bottom: 30px;
@@ -496,9 +596,13 @@ function nextQuestion() {
 /* 操作区域 */
 .action-section {
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
 
-.next-button {
+.submit-button {
   padding: 12px 30px;
   border-radius: 25px;
   font-size: 16px;
@@ -506,11 +610,17 @@ function nextQuestion() {
   border: none;
   box-shadow: 0 4px 15px rgba(103, 194, 58, 0.3);
   transition: all 0.3s ease;
+  min-width: 160px;
 }
 
-.next-button:hover {
+.submit-button:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(103, 194, 58, 0.4);
+}
+
+.submit-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* 响应式设计 */
