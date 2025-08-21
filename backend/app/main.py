@@ -5,15 +5,18 @@ from loguru import logger
 from pydantic import BaseModel, SecretStr
 from dotenv import load_dotenv
 import os
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import JsonOutputParser
 from datetime import datetime
+from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
 
 load_dotenv()
 # 定义请求体模型
 class AnalyzeRequest(BaseModel):
     question: str
     answer: str
+    session_id: str
 
 silicon_flow_api_base = os.getenv("SILICON_FLOW_API_BASE")
 silicon_flow_api_key = os.getenv("SILICON_FLOW_API_KEY")
@@ -25,9 +28,6 @@ model = ChatOpenAI(
 prompt = """
 你是一位专业的面试官，正在进行一场行为面试。你的任务是分析面试者对行为问题的回答质量，并决定是否需要进一步追问。
 
-面试问题：{question}
-
-面试者回答：{answer}
 
 请分析面试者回答的质量，考虑以下方面：
 1. 回答是否具体且有实质性内容
@@ -48,6 +48,8 @@ prompt = """
 - "很好的分享，我了解了你在这方面的经验。"
 - "感谢你的详细说明。"
 
+请注意，追问最多三次即可。如果消息历史显示已经追问三次，则直接设置needFollowUp为false，并返回一个确认信息。
+
 请以以下JSON格式返回你的决策：
 
 {{"needFollowUp": true/false, "feedback": "你的追问问题或确认信息"}}
@@ -58,9 +60,26 @@ prompt = """
 示例2（不需要追问）：
 {{"needFollowUp": false, "feedback": "明白了，谢谢你的详细回答。"}}
 """
-system_prompt = ChatPromptTemplate.from_template(prompt)
 
-chain = system_prompt | model | JsonOutputParser()
+store = {}
+def get_session_history(session_id: str) -> BaseChatMessageHistory:
+    if session_id not in store:
+        store[session_id] = InMemoryChatMessageHistory()
+    logger.info(f"获取会话历史: {session_id}, 内容: {store[session_id]}")
+    return store[session_id]
+
+
+system_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", prompt),
+        MessagesPlaceholder(variable_name="history"),
+        ("human", "{question}")
+    ]
+)
+
+chain = system_prompt | model
+with_message_history = RunnableWithMessageHistory(chain, get_session_history ,input_messages_key="question", history_messages_key="history")
+
 
 app = FastAPI()
 
@@ -68,7 +87,6 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 在生产环境中应该指定具体的域名
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -76,12 +94,17 @@ app.add_middleware(
 @app.post("/api/analyze")
 async def analyze_answer(request: AnalyzeRequest):
     logger.info(f"问题: {request.question}，回答: {request.answer}")
-    result = chain.invoke({"question": request.question, "answer": request.answer})
+    result = with_message_history.invoke({
+        "question":f"面试问题是：{request.question}， 回答是：{request.answer}",
+        },
+        config={"configurable": {"session_id": request.session_id}})
+    logger.info(f"结果: {result}")
+    content = JsonOutputParser().invoke(input=result.content)
     return {
         "success": True,
         "data": {
-            "needFollowUp": result["needFollowUp"],
-            "feedback": result["feedback"]
+            "needFollowUp": content["needFollowUp"],
+            "feedback": content["feedback"]
         },
         "timestamp": datetime.now().isoformat()
     }
