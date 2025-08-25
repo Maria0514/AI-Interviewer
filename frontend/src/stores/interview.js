@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { analyzeAnswer } from '../services/api.js';
+import { analyzeAnswer, createNewSessionId } from '../services/api.js';
 
 export const useInterviewStore = defineStore('interview', () => {
   // 状态
@@ -35,8 +35,8 @@ export const useInterviewStore = defineStore('interview', () => {
   // 方法
   const startInterview = async (params = {}) => {
     try {
-      // 前端直接管理面试会话，无需后端接口
-      sessionId.value = `session_${Date.now()}`;
+      // 创建新的session ID
+      sessionId.value = createNewSessionId();
       currentQuestion.value = questions.value[0];
       currentQuestionIndex.value = 0;
       interviewRecords.value = [];

@@ -22,6 +22,13 @@ function getSessionId() {
   return sessionId;
 }
 
+// 创建新的session_id
+export function createNewSessionId() {
+  const newSessionId = generateUUID();
+  localStorage.setItem('session_id', newSessionId);
+  return newSessionId;
+}
+
 // API调用函数
 export async function analyzeAnswer(question, answer) {
   try {
